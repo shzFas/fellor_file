@@ -10,3 +10,9 @@ tokio.workspace = true
 tracing.workspace = true
 dirs.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+fellor-local.workspace = true
+tempfile.workspace = true
+async-trait.workspace = true
+bytes.workspace = true

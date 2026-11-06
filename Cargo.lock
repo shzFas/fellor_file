@@ -1319,12 +1319,15 @@ name = "fellor-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "dirs",
  "fellor-devices",
  "fellor-index",
  "fellor-local",
  "fellor-transfer",
  "fellor-vfs",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1346,10 +1349,14 @@ dependencies = [
 name = "fellor-index"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "chrono",
  "dirs",
+ "fellor-local",
  "fellor-vfs",
  "rusqlite",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1374,7 +1381,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "dirs",
  "fellor-vfs",
+ "libc",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1425,8 +1435,11 @@ dependencies = [
 name = "fellor-transfer"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "fellor-local",
  "fellor-vfs",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
