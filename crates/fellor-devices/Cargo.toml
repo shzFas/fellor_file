@@ -1,0 +1,12 @@
+[package]
+name = "fellor-devices"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+fellor-local.workspace = true
+fellor-ios.workspace = true
+fellor-mtp.workspace = true
+tokio.workspace = true
+tracing.workspace = true

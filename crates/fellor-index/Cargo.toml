@@ -1,0 +1,12 @@
+[package]
+name = "fellor-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+chrono.workspace = true

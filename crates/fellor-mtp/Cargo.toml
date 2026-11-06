@@ -1,0 +1,14 @@
+[package]
+name = "fellor-mtp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+fellor-ptp.workspace = true
+nusb.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+futures.workspace = true

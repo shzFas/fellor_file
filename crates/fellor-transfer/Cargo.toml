@@ -1,0 +1,12 @@
+[package]
+name = "fellor-transfer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+uuid.workspace = true

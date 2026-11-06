@@ -1,0 +1,20 @@
+[package]
+name = "fellor-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "fellor"
+path = "src/main.rs"
+
+[dependencies]
+fellor-vfs.workspace = true
+fellor-local.workspace = true
+fellor-devices.workspace = true
+fellor-transfer.workspace = true
+fellor-index.workspace = true
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

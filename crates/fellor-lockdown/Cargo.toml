@@ -1,0 +1,15 @@
+[package]
+name = "fellor-lockdown"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+fellor-usbmux.workspace = true
+tokio.workspace = true
+plist.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "fellor-local"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+tracing.workspace = true

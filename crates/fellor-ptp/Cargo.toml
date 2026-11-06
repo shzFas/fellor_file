@@ -1,0 +1,13 @@
+[package]
+name = "fellor-ptp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fellor-vfs.workspace = true
+nusb.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+futures.workspace = true
