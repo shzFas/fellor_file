@@ -2,12 +2,19 @@
 name = "fellor-ptp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+
+[features]
+# In-memory device simulator for tests of dependent crates.
+fake = []
 
 [dependencies]
 fellor-vfs.workspace = true
-nusb.workspace = true
+nusb = { workspace = true, features = ["tokio"] }
 tokio.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 futures.workspace = true
+async-trait.workspace = true
+chrono.workspace = true

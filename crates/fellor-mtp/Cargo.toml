@@ -2,13 +2,18 @@
 name = "fellor-mtp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 fellor-vfs.workspace = true
 fellor-ptp.workspace = true
-nusb.workspace = true
+nusb = { workspace = true, features = ["tokio"] }
 async-trait.workspace = true
 tokio.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+fellor-ptp = { workspace = true, features = ["fake"] }
+tracing-subscriber.workspace = true

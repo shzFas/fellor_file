@@ -1418,13 +1418,16 @@ dependencies = [
  "nusb",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "fellor-ptp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "chrono",
  "fellor-vfs",
  "futures",
  "nusb",
@@ -2581,6 +2584,7 @@ dependencies = [
  "once_cell",
  "rustix 1.1.6",
  "slab",
+ "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
