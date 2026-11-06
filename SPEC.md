@@ -121,7 +121,7 @@ IOKit (крейт `nusb`, чистый Rust, без libusb).
 | 0x9805 | GetObjectPropList | Пакетные метаданные всей папки за один вызов (быстрый листинг) |
 | 0x1009 | GetObject | Скачать файл целиком |
 | 0x101B | GetPartialObject | Докачка (32-битный offset) |
-| 0x95C4 | GetPartialObject64 | Докачка >4 ГБ (Android-расширение) |
+| 0x95C1 | GetPartialObject64 | Докачка >4 ГБ (Android-расширение) |
 | 0x100C / 0x100D | SendObjectInfo / SendObject | Загрузить файл (создание папки — объект с форматом 0x3001 Association) |
 | 0x9808 | SendObjectPropList | Загрузка с 64-битным размером |
 | 0x100B | DeleteObject | Удаление |
@@ -334,12 +334,16 @@ HEIF-декодеров. Опция, по умолчанию выключена:
   `ObjectCompressedSize64`).
 - Zero-length packet: если размер данных кратен `wMaxPacketSize`, устройство шлёт ZLP —
   обрабатываем на обоих направлениях.
-- Быстрый листинг: `GetObjectPropList(handle=0xFFFFFFFF?, format=0, prop=0xFFFFFFFF
-  (all), parent)` — одна транзакция на папку. Если устройство не поддерживает 0x9805
+- Быстрый листинг: `GetObjectPropList(handle=<папка или 0 для корня>, format=0,
+  prop=0xFFFFFFFF (all), group=0, depth=1)` — одна транзакция на папку. Корневой
+  листинг охватывает все хранилища, фильтруем по StorageID. Если устройство не поддерживает 0x9805
   — fallback на `GetObjectHandles` + `GetObjectInfo` по одному.
 - Загрузка: `SendObjectInfo(storage, parent)` + `SendObject` (данные). Если размер
-  > 4 ГиБ или устройство поддерживает 0x9808 — `SendObjectPropList` с
-  `ObjectCompressedSize64 (0xDC04? → используем 0xDC04 ObjectSize как u64 в MTP)`.
+  ≥ 4 ГиБ — `SendObjectPropList` (размер u64 в параметрах 4 и 5; свойство ObjectSize
+  0xDC04 имеет тип UINT64). В ObjectInfo 32-битный размер тогда 0xFFFFFFFF.
+- «Корень» обозначается по-разному: GetObjectHandles и SendObjectInfo — 0xFFFFFFFF,
+  MoveObject и ObjectInfo.ParentObject — 0.
+- Android в режиме MTP — интерфейс 0xFF/0xFF/0x00 со строкой "MTP"; 6/1/1 — режим PTP.
 - Устройство может отвечать `Device_Busy (0x2019)` — ждём 200 мс и повторяем до 10 раз
   (типично сразу после разблокировки экрана).
 - Reset-процедура при зависании: `Cancel request` (class-specific control 0x64) →
