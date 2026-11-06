@@ -1371,8 +1371,10 @@ dependencies = [
  "fellor-lockdown",
  "fellor-usbmux",
  "fellor-vfs",
+ "plist",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

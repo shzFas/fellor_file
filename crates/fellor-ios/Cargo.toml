@@ -11,4 +11,9 @@ fellor-afc.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 bytes.workspace = true
+plist.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+fellor-afc = { workspace = true, features = ["fake"] }
+tracing-subscriber.workspace = true
