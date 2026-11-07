@@ -11,6 +11,7 @@ mod dialogs;
 mod engine;
 mod fmt;
 mod import;
+mod media;
 mod pane;
 mod panes;
 mod platform;

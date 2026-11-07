@@ -30,11 +30,13 @@ pub struct PreviewState {
     pub loading: bool,
     pub texture: Option<egui::TextureHandle>,
     pub error: Option<String>,
+    /// None = fit to window; Some(k) = k image pixels per screen point.
+    pub zoom: Option<f32>,
 }
 
 impl PreviewState {
     pub fn new(entry: Entry) -> Self {
-        Self { entry, loading: true, texture: None, error: None }
+        Self { entry, loading: true, texture: None, error: None, zoom: None }
     }
 
     pub fn set_result(&mut self, ctx: &egui::Context, r: Result<Option<egui::ColorImage>, String>) {
@@ -303,54 +305,137 @@ impl FellorApp {
     }
 
     fn preview_window(&mut self, ctx: &egui::Context) {
-        let Some(p) = &self.preview else { return };
+        let Some(p) = &mut self.preview else { return };
         let mut open = true;
-        let title = p.entry.name.clone();
-        egui::Window::new(title)
-            .id(Id::unique("preview"))
+        let mut open_app = false;
+        let screen = ctx.content_rect();
+        let default = egui::vec2(screen.width() * 0.85, screen.height() * 0.85);
+        let is_video = crate::media::is_video(&p.entry);
+        egui::Window::new(p.entry.name.clone())
+            .id(Id::unique("preview-v2"))
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .min_width(360.0)
+            .resizable(true)
+            .default_size(default)
+            .default_pos(screen.center() - default / 2.0)
+            .min_size(egui::vec2(360.0, 260.0))
             .show(ctx, |ui| {
+                // Toolbar.
+                ui.horizontal(|ui| {
+                    let label = if is_video { "▶ Воспроизвести" } else { "Открыть в программе" };
+                    if ui.button(label).on_hover_text("Enter — открыть в QuickTime / Просмотре").clicked() {
+                        open_app = true;
+                    }
+                    if p.texture.is_some() {
+                        ui.separator();
+                        if ui.button("−").on_hover_text("Уменьшить (⌘−)").clicked() {
+                            p.zoom = Some(p.zoom.unwrap_or(1.0) / 1.25);
+                        }
+                        if ui.button("Вписать").on_hover_text("⌘0").clicked() {
+                            p.zoom = None;
+                        }
+                        if ui.button("1:1").clicked() {
+                            p.zoom = Some(1.0);
+                        }
+                        if ui.button("+").on_hover_text("Увеличить (⌘+)").clicked() {
+                            p.zoom = Some(p.zoom.unwrap_or(1.0) * 1.25);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {}{}",
+                                p.entry.size.map(fmt::size).unwrap_or_else(|| "—".into()),
+                                fmt::date(p.entry.mtime),
+                                p.entry.mime.map(|m| format!(" · {m}")).unwrap_or_default()
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    });
+                });
+                ui.separator();
+
+                let avail = ui.available_size();
                 if let Some(tex) = &p.texture {
-                    // Fit into 75% of the window, never upscale past 1:1.
-                    let screen = ctx.content_rect().size() * 0.75;
-                    let size = tex.size_vec2();
-                    let k = (screen.x / size.x).min(screen.y / size.y).min(1.0);
-                    ui.vertical_centered(|ui| {
-                        ui.add(egui::Image::new(tex).fit_to_exact_size(size * k));
+                    // Pinch / ⌘-scroll / ⌘± zoom.
+                    let (pinch, cmd_plus, cmd_minus, cmd_zero) = ctx.input_mut(|i| {
+                        (
+                            i.zoom_delta(),
+                            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals),
+                            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus),
+                            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num0),
+                        )
+                    });
+                    let img = tex.size_vec2() / ctx.pixels_per_point();
+                    let fit = (avail.x / img.x).min(avail.y / img.y).min(2.0);
+                    let mut k = p.zoom.unwrap_or(fit);
+                    if (pinch - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(ui.max_rect()) {
+                        k *= pinch;
+                        p.zoom = Some(k);
+                    }
+                    if cmd_plus {
+                        k *= 1.25;
+                        p.zoom = Some(k);
+                    }
+                    if cmd_minus {
+                        k /= 1.25;
+                        p.zoom = Some(k);
+                    }
+                    if cmd_zero {
+                        p.zoom = None;
+                        k = fit;
+                    }
+                    k = k.clamp(0.05, 16.0);
+                    let shown = img * k;
+                    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                        let pad = ((avail - shown) / 2.0).max(egui::Vec2::ZERO);
+                        ui.add_space(pad.y);
+                        ui.horizontal(|ui| {
+                            ui.add_space(pad.x);
+                            let r = ui.add(egui::Image::new(tex).fit_to_exact_size(shown).sense(egui::Sense::click()));
+                            if r.double_clicked() {
+                                p.zoom = if p.zoom.is_some() { None } else { Some(1.0) };
+                            }
+                            if is_video {
+                                // Play badge over the poster frame.
+                                let c = r.rect.center();
+                                ui.painter().circle_filled(c, 34.0, egui::Color32::from_black_alpha(150));
+                                ui.painter().text(c, egui::Align2::CENTER_CENTER, "▶", egui::FontId::proportional(34.0), egui::Color32::WHITE);
+                                if r.clicked() {
+                                    open_app = true;
+                                }
+                            }
+                        });
                     });
                 } else {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(40.0);
-                        if p.loading {
-                            ui.spinner();
-                            ui.label("Загрузка превью…");
-                        } else {
-                            ui.label(RichText::new(crate::panes::entry_icon(&p.entry)).size(64.0));
-                            match &p.error {
-                                Some(e) => ui.label(RichText::new(format!("Превью недоступно: {e}")).weak()),
-                                None => ui.label(RichText::new("Превью недоступно").weak()),
-                            };
+                    ui.allocate_ui(avail, |ui| {
+                        ui.set_min_size(avail);
+                        {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space((avail.y / 2.0 - 70.0).max(0.0));
+                                if p.loading {
+                                    ui.spinner();
+                                    ui.label("Загрузка превью…");
+                                } else {
+                                    ui.label(RichText::new(crate::panes::entry_icon(&p.entry)).size(72.0));
+                                    match &p.error {
+                                        Some(e) => ui.label(RichText::new(format!("Превью недоступно: {e}")).weak()),
+                                        None if is_video => ui.label(RichText::new("Видео большое — нажмите «▶ Воспроизвести»").weak()),
+                                        None => ui.label(RichText::new("Превью недоступно").weak()),
+                                    };
+                                }
+                            });
                         }
-                        ui.add_space(40.0);
                     });
                 }
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!(
-                        "{} · {}{}",
-                        p.entry.size.map(fmt::size).unwrap_or_else(|| "—".into()),
-                        fmt::date(p.entry.mtime),
-                        p.entry.mime.map(|m| format!(" · {m}")).unwrap_or_default()
-                    ))
-                    .small()
-                    .weak());
-                });
             });
+        let entry = p.entry.clone();
         if !open {
             self.preview = None;
+        }
+        if open_app {
+            self.open_with_app(entry);
         }
     }
 
@@ -378,6 +463,20 @@ impl FellorApp {
 
                 ui.label("Скрытые файлы");
                 hidden_changed = ui.checkbox(&mut self.settings.show_hidden, "показывать (⌘⇧.)").changed();
+                ui.end_row();
+
+                ui.label("Превью при наведении");
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut self.settings.hover_preview, "показывать");
+                    ui.add_enabled(
+                        self.settings.hover_preview,
+                        egui::Slider::new(&mut self.settings.hover_size, 200.0..=800.0).suffix(" pt").text("размер"),
+                    );
+                    ui.add_enabled(
+                        self.settings.hover_preview,
+                        egui::Slider::new(&mut self.settings.hover_delay_ms, 0..=1500).suffix(" мс").text("задержка"),
+                    );
+                });
                 ui.end_row();
 
                 ui.label("Папка импорта");

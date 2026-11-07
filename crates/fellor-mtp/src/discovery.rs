@@ -52,8 +52,16 @@ pub fn android_vendor(vid: u16) -> Option<&'static str> {
     ANDROID_VENDOR_IDS.iter().find(|(v, _)| *v == vid).map(|(_, n)| *n)
 }
 
+pub const APPLE_VENDOR_ID: u16 = 0x05ac;
+
 /// Decide whether a USB device is ours.
 pub fn classify(vid: u16, device_class: u8, ifaces: &[IfaceDesc]) -> Option<Candidate> {
+    // iPhone/iPad also expose a PTP "camera" interface for photo import. They are
+    // served with full file access by fellor-ios over usbmuxd, so skip Apple here —
+    // otherwise the same phone shows up twice and we steal the PTP interface.
+    if vid == APPLE_VENDOR_ID {
+        return None;
+    }
     if let Some(i) = ifaces.iter().find(|i| is_ptp_interface(i.class, i.subclass, i.protocol, i.name.as_deref())) {
         return Some(Candidate::Ptp(PtpInterface {
             number: i.number,
@@ -347,6 +355,8 @@ mod tests {
         assert_eq!(classify(0x18d1, 0x09, &[]), None);
         // Unknown vendor without PTP interface.
         assert_eq!(classify(0x05ac, 0, &[i(0, 0xFF, 0xFE, 2, None)]), None);
+        // iPhone's PTP interface is left to fellor-ios.
+        assert_eq!(classify(0x05ac, 0, &[i(0, 0x06, 0x01, 0x01, None)]), None);
         // Vendor-specific interface not named MTP.
         assert_eq!(classify(0x1234, 0, &[i(0, 0xFF, 0xFF, 0, Some("Debug"))]), None);
     }

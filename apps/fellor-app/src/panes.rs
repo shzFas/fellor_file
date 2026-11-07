@@ -30,6 +30,7 @@ enum Act {
     Reveal(VPath),
     Properties(Entry),
     Preview(Entry),
+    Hover(Entry),
     ClearSelection,
 }
 
@@ -125,6 +126,12 @@ impl FellorApp {
             Act::Reveal(p) => self.reveal_in_finder(&p),
             Act::Properties(e) => self.dialog = Some(Dialog::Properties { entry: e }),
             Act::Preview(e) => self.open_preview(e),
+            Act::Hover(e) => {
+                self.hover_seen = true;
+                if self.hover.as_ref().map(|h| &h.entry.path) != Some(&e.path) {
+                    self.hover = Some(crate::app::HoverState { entry: e, since: std::time::Instant::now() });
+                }
+            }
             Act::ClearSelection => self.panes[i].selected.clear(),
         }
     }
@@ -297,6 +304,9 @@ impl FellorApp {
                         ui.add(egui::Label::new(RichText::new(fmt::date(e.mtime)).small()).selectable(false));
                     });
                     let r = row.response();
+                    if r.hovered() && !e.is_dir() {
+                        acts.push(Act::Hover(e.clone()));
+                    }
                     if r.double_clicked() {
                         acts.push(Act::Open(e.clone()));
                     } else if r.clicked() {
@@ -364,7 +374,14 @@ fn fellor_vfs_is_host(p: &VPath) -> bool {
 }
 
 fn row_menu(ui: &mut egui::Ui, e: &Entry, is_local: bool, acts: &mut Vec<Act>) {
-    if ui.button(if e.is_dir() { "Открыть" } else { "Открыть / просмотр" }).clicked() {
+    let open_label = if e.is_dir() {
+        "Открыть"
+    } else if crate::media::is_video(e) {
+        "▶ Воспроизвести"
+    } else {
+        "Открыть в программе"
+    };
+    if ui.add(egui::Button::new(open_label).shortcut_text("Enter")).clicked() {
         acts.push(Act::Open(e.clone()));
     }
     if !e.is_dir() && ui.add(egui::Button::new("Быстрый просмотр").shortcut_text("Пробел")).clicked() {

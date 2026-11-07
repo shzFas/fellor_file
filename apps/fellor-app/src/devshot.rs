@@ -2,7 +2,7 @@
 //! permission): `FELLOR_SCREENSHOT=out.png Fellor --demo` saves a capture of
 //! the window after a few seconds and exits. `FELLOR_SCENE` picks a state to
 //! show first: `copy`, `import`, `preview`, `delete`, `settings`, `conflict`,
-//! `device` (opens the demo iPhone in the left pane).
+//! `device` (opens the demo iPhone in the left pane), `hover` (hover preview).
 
 use crate::app::FellorApp;
 use fellor_transfer::TransferOp;
@@ -35,7 +35,7 @@ impl FellorApp {
             d.step = 1;
             let iphone = VPath::from_str_path("ios:DEMO00008110", "/DCIM/100APPLE");
             match d.scene.as_str() {
-                "device" | "copy" | "preview" | "delete" | "conflict" => {
+                "device" | "copy" | "preview" | "hover" | "delete" | "conflict" => {
                     self.active = 0;
                     self.navigate(0, iphone);
                 }
@@ -62,6 +62,11 @@ impl FellorApp {
                     }
                 }
                 "importrun" => self.submit_import(),
+                "hover" => {
+                    if let Some(e) = p.entry_at(3).cloned() {
+                        self.fake_hover = Some((e, egui::pos2(420.0, 220.0)));
+                    }
+                }
                 "preview" => {
                     p.click(3, false, false);
                     if let Some(e) = p.cursor_entry().cloned() {

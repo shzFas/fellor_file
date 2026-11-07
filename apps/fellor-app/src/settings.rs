@@ -60,6 +60,12 @@ pub struct Settings {
     pub transfers_open: bool,
     /// Last local directories of the left/right pane (host paths).
     pub last_paths: [Option<String>; 2],
+    /// Show a floating preview when the mouse rests on a file.
+    pub hover_preview: bool,
+    /// Hover preview edge length in points.
+    pub hover_size: f32,
+    /// Delay before the hover preview appears.
+    pub hover_delay_ms: u32,
 }
 
 impl Default for Settings {
@@ -71,6 +77,9 @@ impl Default for Settings {
             import_template: "{date}".into(),
             transfers_open: true,
             last_paths: [None, None],
+            hover_preview: true,
+            hover_size: 380.0,
+            hover_delay_ms: 300,
         }
     }
 }

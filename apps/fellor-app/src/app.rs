@@ -37,6 +37,51 @@ pub enum UiMsg {
     ImportPlanned { device: BackendId, result: Result<fellor_index::ImportPlan, String> },
     ImportReady { device: BackendId, groups: Vec<(VPath, Vec<Entry>)>, op: TransferOp, errors: Vec<String> },
     Toast(ToastKind, String),
+    /// Hover preview image finished loading.
+    HoverImage { key: String, result: Result<Option<egui::ColorImage>, String> },
+    /// Download-to-open progress.
+    OpenProgress { id: u64, done: u64, total: u64 },
+    /// Download-to-open finished; open the local file with its macOS app.
+    Opened { id: u64, result: Result<std::path::PathBuf, String> },
+}
+
+/// A device file being downloaded so macOS can open/play it.
+pub struct OpeningState {
+    pub id: u64,
+    pub name: String,
+    pub done: u64,
+    pub total: u64,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The row under the mouse and since when.
+pub struct HoverState {
+    pub entry: Entry,
+    pub since: Instant,
+}
+
+/// Small LRU of decoded preview textures, keyed by `media::texture_key`.
+#[derive(Default)]
+pub struct ThumbCache {
+    map: HashMap<String, Option<egui::TextureHandle>>,
+    order: VecDeque<String>,
+}
+
+impl ThumbCache {
+    const CAP: usize = 300;
+    pub fn get(&self, k: &str) -> Option<&Option<egui::TextureHandle>> {
+        self.map.get(k)
+    }
+    pub fn insert(&mut self, k: String, v: Option<egui::TextureHandle>) {
+        if self.map.insert(k.clone(), v).is_none() {
+            self.order.push_back(k);
+            while self.order.len() > Self::CAP {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,6 +118,15 @@ pub struct FellorApp {
     pub conflicts: VecDeque<ConflictPrompt>,
     pub toasts: Vec<Toast>,
     pub preview: Option<PreviewState>,
+    pub opening: Option<OpeningState>,
+    pub thumbs: ThumbCache,
+    pub hover: Option<HoverState>,
+    /// Set by the table each frame a file row is hovered.
+    pub hover_seen: bool,
+    /// Texture key currently loading for the hover preview (one at a time).
+    pub hover_loading: Option<String>,
+    /// Dev screenshots only: pretend the mouse rests on this row at this point.
+    pub fake_hover: Option<(Entry, egui::Pos2)>,
     pub import: Option<ImportDialog>,
     pub import_tasks: HashMap<TaskId, ImportBatch>,
     /// `--demo` stand-in for the SQLite import index.
@@ -152,6 +206,12 @@ impl FellorApp {
             conflicts: VecDeque::new(),
             toasts: Vec::new(),
             preview: None,
+            opening: None,
+            thumbs: ThumbCache::default(),
+            hover: None,
+            hover_seen: false,
+            hover_loading: None,
+            fake_hover: None,
             import: None,
             import_tasks: HashMap::new(),
             demo_imported: Arc::default(),
@@ -162,6 +222,7 @@ impl FellorApp {
             devshot: if demo_mode { crate::devshot::DevShot::from_env() } else { None },
             next_req: 0,
         };
+        std::thread::spawn(crate::media::prune_cache);
         app.load_pane(0);
         app.load_pane(1);
         app
@@ -279,9 +340,47 @@ impl FellorApp {
             } else if let Err(err) = platform::open(&host) {
                 self.toast(ToastKind::Error, format!("Не удалось открыть: {err}"));
             }
-        } else {
+        } else if self.demo {
             self.open_preview(e);
+        } else {
+            self.open_with_app(e);
         }
+    }
+
+    /// Open a file with its default macOS app (QuickTime for video, Preview
+    /// for photos…). Device files are downloaded into the cache first.
+    pub fn open_with_app(&mut self, e: Entry) {
+        if e.is_dir() {
+            return;
+        }
+        if let Some(host) = crate::media::local_copy(&e) {
+            if let Err(err) = platform::open(&host) {
+                self.toast(ToastKind::Error, format!("Не удалось открыть: {err}"));
+            }
+            return;
+        }
+        if let Some(o) = &self.opening {
+            o.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let Some(b) = self.backend(&e.path.backend) else { return };
+        self.next_req += 1;
+        let id = self.next_req;
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.opening = Some(OpeningState { id, name: e.name.clone(), done: 0, total: e.size.unwrap_or(0), cancel: cancel.clone() });
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        let mut last = Instant::now();
+        self.spawn(async move {
+            let result = crate::media::fetch_local(b, &e, cancel, move |done, total| {
+                if last.elapsed() >= Duration::from_millis(100) {
+                    last = Instant::now();
+                    let _ = tx.send(UiMsg::OpenProgress { id, done, total });
+                    ctx.request_repaint();
+                }
+            })
+            .await;
+            UiMsg::Opened { id, result }
+        });
     }
 
     pub fn reveal_in_finder(&mut self, path: &VPath) {
@@ -461,13 +560,130 @@ impl FellorApp {
         }
         let Some(b) = self.backend(&entry.path.backend) else { return };
         let path = entry.path.clone();
-        let size = entry.size.unwrap_or(0);
-        let decodable = matches!(entry.mime, Some("image/jpeg" | "image/png" | "image/gif" | "image/webp"));
-        self.preview = Some(PreviewState::new(entry));
+        self.preview = Some(PreviewState::new(entry.clone()));
         self.spawn(async move {
-            let result = load_preview(b, &path, size, decodable).await;
+            let result = crate::media::load_image(b, entry, 2560, crate::media::Fetch::ImagesAndSmallVideos).await;
             UiMsg::Preview { path, result }
         });
+    }
+
+    /// Start loading the hover preview for `e` unless cached or busy.
+    fn request_hover_image(&mut self, e: &Entry, max_px: u32) {
+        let key = crate::media::texture_key(e, max_px);
+        if self.thumbs.get(&key).is_some() || self.hover_loading.is_some() {
+            return;
+        }
+        let Some(b) = self.backend(&e.path.backend) else { return };
+        self.hover_loading = Some(key.clone());
+        let e = e.clone();
+        self.spawn(async move {
+            let result = crate::media::load_image(b, e, max_px, crate::media::Fetch::Images).await;
+            UiMsg::HoverImage { key, result }
+        });
+    }
+
+    /// Floating preview next to the mouse for the hovered file row.
+    fn hover_preview_ui(&mut self, ctx: &egui::Context) {
+        if let Some((e, _)) = &self.fake_hover {
+            self.hover_seen = true;
+            if self.hover.as_ref().map(|h| &h.entry.path) != Some(&e.path) {
+                self.hover = Some(HoverState { entry: e.clone(), since: Instant::now() - Duration::from_secs(1) });
+            }
+        }
+        let blocked = self.dialog.is_some() || self.import.is_some() || !self.conflicts.is_empty() || self.settings_open || self.help_open || self.preview.is_some();
+        if !self.hover_seen || blocked || !self.settings.hover_preview || ctx.input(|i| i.pointer.any_down()) {
+            self.hover = None;
+            return;
+        }
+        let Some(h) = &self.hover else { return };
+        let delay = Duration::from_millis(self.settings.hover_delay_ms as u64);
+        if h.since.elapsed() < delay {
+            ctx.request_repaint_after(delay - h.since.elapsed());
+            return;
+        }
+        let e = h.entry.clone();
+        let side = self.settings.hover_size.clamp(160.0, 900.0);
+        let max_px = (side * ctx.pixels_per_point()).round() as u32;
+        self.request_hover_image(&e, max_px);
+        let key = crate::media::texture_key(&e, max_px);
+        let tex = self.thumbs.get(&key).cloned();
+        let loading = tex.is_none();
+        let Some(pos) = self.fake_hover.as_ref().map(|f| f.1).or_else(|| ctx.pointer_hover_pos()) else { return };
+        let screen = ctx.content_rect();
+        // Place to the right of the cursor, or to the left if it doesn't fit.
+        let w = side + 16.0;
+        let x = if pos.x + 24.0 + w < screen.right() { pos.x + 24.0 } else { (pos.x - 24.0 - w).max(screen.left()) };
+        let y = (pos.y - side / 2.0).clamp(screen.top(), (screen.bottom() - side - 60.0).max(screen.top()));
+        egui::Area::new(egui::Id::unique("hover-preview"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(egui::pos2(x, y))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(side);
+                    match tex {
+                        Some(Some(t)) => {
+                            let sz = t.size_vec2() / ctx.pixels_per_point();
+                            let k = (side / sz.x).min(side / sz.y).min(1.0);
+                            ui.add(egui::Image::new(&t).fit_to_exact_size(sz * k));
+                        }
+                        None => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Загрузка превью…");
+                            });
+                        }
+                        Some(None) => {
+                            let hint = if crate::media::is_video(&e) { "🎞 Enter — воспроизвести" } else { "Превью недоступно" };
+                            ui.label(egui::RichText::new(hint).weak());
+                        }
+                    }
+                    ui.label(egui::RichText::new(&e.name).small().strong());
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · {}",
+                            e.size.map(crate::fmt::size).unwrap_or_else(|| "—".into()),
+                            crate::fmt::date(e.mtime)
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                });
+            });
+        if loading {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    /// Progress strip while a device file is downloaded for opening.
+    fn opening_ui(&mut self, ctx: &egui::Context) {
+        let Some(o) = &self.opening else { return };
+        let mut cancel = false;
+        egui::Area::new(egui::Id::unique("opening"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(380.0);
+                    ui.label(format!("Открываю «{}»…", o.name));
+                    let frac = if o.total > 0 { o.done as f32 / o.total as f32 } else { 0.0 };
+                    ui.add(egui::ProgressBar::new(frac).show_percentage().desired_width(360.0));
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{} из {}", crate::fmt::size(o.done), crate::fmt::size(o.total)))
+                                .small()
+                                .weak(),
+                        );
+                        if ui.button("Отмена").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            });
+        if cancel {
+            o.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.opening = None;
+        }
     }
 
     // ───────────────────────────── event handling ─────────────────────────────
@@ -519,6 +735,41 @@ impl FellorApp {
                 if let Some(p) = &mut self.preview {
                     if p.entry.path == path {
                         p.set_result(&self.ctx, result);
+                    }
+                }
+            }
+            UiMsg::HoverImage { key, result } => {
+                if self.hover_loading.as_deref() == Some(&key) {
+                    self.hover_loading = None;
+                }
+                let tex = match result {
+                    Ok(Some(img)) => Some(self.ctx.load_texture(format!("hover:{key}"), img, egui::TextureOptions::LINEAR)),
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::debug!("hover preview failed: {e}");
+                        None
+                    }
+                };
+                self.thumbs.insert(key, tex);
+            }
+            UiMsg::OpenProgress { id, done, total } => {
+                if let Some(o) = &mut self.opening {
+                    if o.id == id {
+                        o.done = done;
+                        o.total = total;
+                    }
+                }
+            }
+            UiMsg::Opened { id, result } => {
+                if self.opening.as_ref().is_some_and(|o| o.id == id) {
+                    self.opening = None;
+                    match result {
+                        Ok(p) => {
+                            if let Err(err) = platform::open(&p) {
+                                self.toast(ToastKind::Error, format!("Не удалось открыть: {err}"));
+                            }
+                        }
+                        Err(e) => self.toast(ToastKind::Error, format!("Не удалось открыть: {e}")),
                     }
                 }
             }
@@ -839,29 +1090,6 @@ fn forward<T: Send + 'static>(
     });
 }
 
-/// Thumbnail (or, for small decodable images, the file itself), decoded off
-/// the UI thread into an egui image no larger than 1200 px.
-async fn load_preview(b: BackendRef, path: &VPath, size: u64, decodable: bool) -> Result<Option<egui::ColorImage>, String> {
-    let mut bytes = b.thumbnail(path).await.map_err(|e| e.to_string())?;
-    if bytes.is_none() && decodable && size <= 40_000_000 {
-        let mut r = b.open_read(path, 0).await.map_err(|e| e.to_string())?;
-        let mut buf = Vec::with_capacity(size as usize);
-        while let Some(chunk) = r.read_chunk(1 << 20).await.map_err(|e| e.to_string())? {
-            buf.extend_from_slice(&chunk);
-        }
-        bytes = Some(buf.into());
-    }
-    let Some(bytes) = bytes else { return Ok(None) };
-    tokio::task::spawn_blocking(move || {
-        let img = image::load_from_memory(&bytes).map_err(|e| format!("не удалось декодировать: {e}"))?;
-        let img = if img.width() > 1200 || img.height() > 1200 { img.thumbnail(1200, 1200) } else { img };
-        let rgba = img.to_rgba8();
-        Ok(Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw())))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 impl eframe::App for FellorApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.devshot.is_some() {
@@ -880,9 +1108,12 @@ impl eframe::App for FellorApp {
         self.toolbar(ui);
         self.transfers_panel(ui);
         self.sidebar(ui);
+        self.hover_seen = false;
         egui::CentralPanel::default().show(ui, |ui| self.panes_ui(ui));
 
         self.dialogs(&ctx);
+        self.hover_preview_ui(&ctx);
+        self.opening_ui(&ctx);
         self.show_toasts(&ctx);
         if self.transfers.any_active() {
             ctx.request_repaint_after(Duration::from_millis(250));
