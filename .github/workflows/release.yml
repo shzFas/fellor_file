@@ -1,0 +1,30 @@
+name: Release
+
+# Push a tag like v0.2.0 to build Fellor.app (universal arm64 + x86_64)
+# and attach the .dmg, .zip and CLI archive to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: ./scripts/bundle.sh --universal
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "Fellor File $GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/*.dmg dist/*.zip dist/*.tar.gz dist/SHA256SUMS.txt
